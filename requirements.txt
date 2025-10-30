@@ -1,0 +1,8 @@
+pandas
+numpy<2.0
+Pillow
+opencv-python
+face_recognition
+mysql-connector-python
+bcrypt
+tkcalendar

@@ -1,9 +1,16 @@
-# Tên file: ui/kiosk_window.py
+# -*- coding: utf-8 -*-
+"""
+Cửa sổ Kiosk Chấm công - Giao diện đơn giản, Logic đầy đủ
+"""
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 import datetime as dt
 from PIL import Image, ImageTk
+
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import APP_TITLE, DEFAULT_TOL
 from services import db
@@ -14,78 +21,84 @@ try:
 except Exception:
     cv2 = None
 
+
 class KioskWindow(tk.Tk):
-    """
-    Cửa sổ chính cho Ứng dụng Kiosk Chấm công (chỉ Camera).
-    Kế thừa từ file attendance_tab.py cũ.
-    """
+    """Cửa sổ Kiosk Chấm công - Giao diện đơn giản, Logic đầy đủ"""
+    
     def __init__(self):
         super().__init__()
-
-        # === Cấu hình cửa sổ ===
-        self.title(f"{APP_TITLE} - Kiosk")
-        # Chạy toàn màn hình
-        self.attributes('-fullscreen', True)
-        self.configure(bg="#e8f0fe")
         
-        # Style (chỉ dùng cho Label)
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("TFrame", background="#e8f0fe")
-        style.configure("TLabel", background="#e8f0fe", font=("Segoe UI", 10))
-
-        # === Giao diện ===
-        # 1. Bảng Video
-        self.video_panel = ttk.Label(self, relief="sunken", anchor="center")
-        self.video_panel.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # 2. Trạng thái
-        self.att_status = tk.StringVar(value="Đang khởi động camera...")
-        status_label = ttk.Label(
-            self, 
-            textvariable=self.att_status,
-            font=("Segoe UI", 14, "bold"),
-            anchor="center"
-        )
-        status_label.pack(fill="x", pady=10)
-
-        # === Trạng thái Webcam ===
+        # === CẤU HÌNH CỬA SỔ ===
+        self.title(f"{APP_TITLE} - Kiosk Chấm Công")
+        self.geometry("950x650")
+        self.resizable(False, False)
+        
+        # Căn giữa màn hình
+        self._center_window()
+        
+        # === TRẠNG THÁI ===
         self.cap = None
-        self._updating_video = False # Cờ cho vòng lặp update video
-        self._auto_scanning = False  # Cờ cho vòng lặp auto-scan
+        self._updating = False
+        self._is_scanning = False
         self._frame_imgtk = None
-        self._target_w, self._target_h = 1280, 720
-        self._video_interval_ms = 33 # ~30 FPS cho video
-        self._scan_interval_ms = 2000  # Quét 2 giây / lần
+        self._target_w, self._target_h = 900, 520
+        self._interval_ms = 33
         
-        # === Trạng thái Cooldown ===
+        # Logic chấm công
+        self._cooldown_seconds = 10
         self._last_scan_emp_id = None
         self._last_scan_time = None
-        self._cooldown_seconds = 10 # Chờ 10s trước khi quét lại cùng 1 người
-
-        # === Sự kiện ===
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
-        # Bắt phím 'q' hoặc 'Esc' để thoát toàn màn hình
-        self.bind("<Escape>", self._exit_fullscreen)
-        self.bind("q", self._exit_fullscreen)
         
-        # Tự động khởi động
-        self.after(100, self.start_camera)
+        # === XÂY DỰNG GIAO DIỆN ===
+        self._build_ui()
+        
+        # === SỰ KIỆN ===
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+    
+    def _center_window(self):
+        """Căn giữa cửa sổ"""
+        self.update_idletasks()
+        width = 950
+        height = 650
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f'{width}x{height}+{x}+{y}')
+    
+    def _build_ui(self):
+        """Xây dựng giao diện"""
+        
+        # === CONTROLS ===
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=10, pady=8)
 
-    def _exit_fullscreen(self, event=None):
-        """Cho phép thoát fullscreen bằng phím Esc hoặc Q"""
-        self.attributes('-fullscreen', False)
-        self.geometry("1024x768")
+        ttk.Label(top, text="Ngưỡng nhận diện (nhỏ = chặt):").pack(side="left")
+        self.scale_tol = ttk.Scale(top, from_=0.30, to=0.70, value=DEFAULT_TOL,
+                                   orient="horizontal", length=200)
+        self.scale_tol.pack(side="left", padx=6)
 
-    # ---------- Camera ----------
+        ttk.Button(top, text="Bật camera", command=self.start_camera).pack(side="left", padx=4)
+        ttk.Button(top, text="Tắt camera", command=self.stop_camera).pack(side="left", padx=4)
+        ttk.Button(top, text="Chấm công (chụp)", command=self.on_scan_button_click).pack(side="left", padx=4)
+
+        # === VIDEO PANEL ===
+        self.video_panel = ttk.Label(self, relief="sunken", anchor="center")
+        self.video_panel.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # === STATUS ===
+        self.att_status = tk.StringVar(value="Chưa có thao tác.")
+        ttk.Label(self, textvariable=self.att_status, wraplength=900, justify="center").pack(pady=6)
+
+    # ==================== CAMERA ====================
+    
     def start_camera(self):
+        """Khởi động camera"""
         if cv2 is None:
             messagebox.showerror("Lỗi", "OpenCV (cv2) chưa được cài đặt.")
-            self.on_close()
             return
         if self.cap is not None:
             return
 
+        # Mở camera (CAP_DSHOW giúp ổn định trên Windows)
         try:
             self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         except Exception:
@@ -94,138 +107,208 @@ class KioskWindow(tk.Tk):
         if not self.cap or not self.cap.isOpened():
             self.cap = None
             messagebox.showerror("Lỗi", "Không mở được webcam.")
-            self.on_close()
             return
 
+        # Gợi ý tham số để mượt hơn
         self.cap.set(cv2.CAP_PROP_FPS, 30)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        # Bắt đầu cả 2 vòng lặp: 1 cho video, 1 cho scan
-        self._updating_video = True
-        self._auto_scanning = True
-        
-        self._update_video_after() # Bắt đầu vòng lặp video (nhanh)
-        self.after(self._scan_interval_ms, self._auto_scan) # Bắt đầu vòng lặp scan (chậm)
-        
-        self.att_status.set("Camera đã bật. Sẵn sàng chấm công.")
+        self._updating = True
+        self._update_video_after()
+        self.att_status.set("Camera đã bật.")
 
     def stop_camera(self):
-        # Dừng cả 2 vòng lặp
-        self._updating_video = False
-        self._auto_scanning = False
-        
+        """Dừng camera"""
+        self._updating = False
         if self.cap is not None:
             try:
                 self.cap.release()
             except Exception:
                 pass
             self.cap = None
-            
+        # Xoá ảnh khi tắt
         self.video_panel.configure(image="")
         self._frame_imgtk = None
         self.att_status.set("Camera đã tắt.")
 
     def _update_video_after(self):
-        """Vòng lặp 1: Cập nhật khung hình (nhanh ~30 FPS)"""
-        if not self._updating_video or self.cap is None:
+        """Cập nhật khung hình bằng Tk.after (main thread) để tránh giật/chớp."""
+        if not self._updating or self.cap is None:
             return
 
+        # Đọc frame
         _ = self.cap.grab()
         ret, frame = self.cap.read()
         if ret:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(rgb)
+            # Giữ tỉ lệ ảnh, scale vừa panel
             img.thumbnail((self._target_w, self._target_h), Image.LANCZOS)
             imgtk = ImageTk.PhotoImage(image=img)
             self._frame_imgtk = imgtk
             self.video_panel.configure(image=imgtk)
 
-        self.after(self._video_interval_ms, self._update_video_after)
+        # Lặp lại ~30fps
+        self.after(self._interval_ms, self._update_video_after)
 
-    def _auto_scan(self):
-        """Vòng lặp 2: Tự động quét (chậm, mỗi 2 giây)"""
-        if not self._auto_scanning or self.cap is None:
+    # ==================== CHẤM CÔNG ====================
+    
+    def on_scan_button_click(self):
+        """Xử lý khi nhấn nút CHẤM CÔNG"""
+        if self._is_scanning:
+            self.att_status.set("⏳ Đang xử lý, vui lòng đợi...")
             return
-
-        # Thực hiện quét
-        try:
-            self.scan_and_mark()
-        except Exception as e:
-            print(f"Lỗi khi auto-scan: {e}")
-            self.att_status.set(f"Lỗi xử lý: {e}")
-            
-        # Lên lịch quét tiếp theo
-        self.after(self._scan_interval_ms, self._auto_scan)
-
-    def scan_and_mark(self):
-        """Thực hiện quét, nhận diện và chấm công (đã sửa đổi)"""
-        tol = DEFAULT_TOL # Lấy từ config
+        
         if self.cap is None:
-            # Camera chưa sẵn sàng, bỏ qua lần quét này
+            messagebox.showwarning("Chú ý", "Hãy bật camera trước.")
             return
-
+        
+        self._is_scanning = True
+        
+        # Đếm ngược
+        self.att_status.set("📸 Chuẩn bị: 3...")
+        self.after(700, lambda: self._countdown(2))
+    
+    def _countdown(self, count):
+        """Đếm ngược"""
+        if count > 0:
+            self.att_status.set(f"📸 Chuẩn bị: {count}...")
+            self.after(700, lambda: self._countdown(count - 1))
+        else:
+            self.att_status.set("📸 CHỤP! Đang nhận diện...")
+            self.after(200, self._perform_scan)
+    
+    def _perform_scan(self):
+        """Thực hiện quét và nhận diện"""
+        tol = float(self.scale_tol.get())
+        
+        # Đọc frame
         ret, frame = self.cap.read()
         if not ret:
-            self.att_status.set("Lỗi: Không đọc được frame.")
+            self._finish_scan("❌ Lỗi: Không đọc được ảnh từ camera.")
             return
-
+        
         img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        
+        # Encode khuôn mặt
+        self.att_status.set("🔍 Đang phân tích khuôn mặt...")
+        self.update()
+        
         try:
             enc = face_encode_from_image(img)
         except Exception as e:
-            self.att_status.set(f"Lỗi xử lý ảnh: {e}")
+            self._finish_scan(f"❌ Lỗi xử lý ảnh: {e}")
             return
-
+        
         if enc is None:
-            self.att_status.set("Không phát hiện được khuôn mặt. Vui lòng nhìn thẳng.")
+            self._finish_scan(
+                "❌ KHÔNG PHÁT HIỆN KHUÔN MẶT | "
+                "Vui lòng: Đứng gần camera hơn, Nhìn thẳng vào camera, Đảm bảo đủ ánh sáng"
+            )
             return
-
+        
+        # Tìm kiếm nhân viên
+        self.att_status.set("🔎 Đang tìm kiếm nhân viên...")
+        self.update()
+        
         m = match_employee(enc, tol)
         if m is None:
-            self.att_status.set("❌ Không khớp với nhân viên nào (Unknown).")
+            self._finish_scan(
+                "❌ KHÔNG NHẬN DIỆN ĐƯỢC | "
+                "Khuôn mặt không có trong hệ thống. Vui lòng liên hệ quản trị viên."
+            )
             return
-
-        # === Logic mới: Cooldown & Nghỉ phép ===
+        
+        # Thông tin nhân viên
         emp_id = int(m["id"])
         emp_name = m["name"]
+        emp_code = m.get("emp_code", "N/A")
+        distance = m.get("distance", 0)
         now = dt.datetime.now()
-
-        # 1. Kiểm tra Cooldown: Tránh quét 1 người liên tục
+        
+        # Kiểm tra Cooldown
         if (self._last_scan_emp_id == emp_id and
             self._last_scan_time is not None and
             (now - self._last_scan_time).total_seconds() < self._cooldown_seconds):
             
-            self.att_status.set(f"Đã quét {emp_name}. Vui lòng đợi {self._cooldown_seconds}s.")
+            remaining = self._cooldown_seconds - int(
+                (now - self._last_scan_time).total_seconds()
+            )
+            self._finish_scan(
+                f"⏱️ BẠN ĐÃ CHẤM CÔNG GẦN ĐÂY | "
+                f"Vui lòng đợi {remaining} giây nữa."
+            )
             return
-
-        # 2. Kiểm tra Nghỉ phép:
+        
+        # Kiểm tra Nghỉ phép
         try:
-            if db.is_employee_on_leave(emp_id, now.date()):
-                self.att_status.set(f"❌ {emp_name} đang trong kỳ nghỉ phép. Không thể chấm công.")
+            if hasattr(db, 'is_employee_on_leave') and db.is_employee_on_leave(emp_id, now.date()):
+                self._finish_scan(
+                    f"🏖️ NGHỈ PHÉP | "
+                    f"{emp_name} ({emp_code}) đang trong kỳ nghỉ phép. Không thể chấm công."
+                )
                 self._last_scan_emp_id = emp_id
                 self._last_scan_time = now
                 return
-        except Exception as e:
-            self.att_status.set(f"Lỗi kiểm tra nghỉ phép: {e}")
-            return
-
-        # 3. Ghi nhận chấm công (Gọi hàm IN/OUT mới)
+        except Exception:
+            pass
+        
+        # Ghi nhận chấm công
+        self.att_status.set("💾 Đang lưu dữ liệu...")
+        self.update()
+        
         try:
-            ok, msg, scan_type = db.mark_attendance(emp_id)
+            result = db.mark_attendance(emp_id)
+            
+            # Xử lý kết quả trả về
+            if isinstance(result, tuple):
+                ok, msg, scan_type = result
+            else:
+                ok = result
+                scan_type = 'IN'
+                msg = 'Thành công'
+            
             if ok:
-                # Chấm công thành công, cập nhật trạng thái
-                self.att_status.set(f"{msg} ({emp_name})")
+                icon = "🟢" if scan_type == 'IN' else "🔴"
+                action = "VÀO LÀM" if scan_type == 'IN' else "TAN LÀM"
+                
+                self._finish_scan(
+                    f"{icon} CHẤM CÔNG THÀNH CÔNG! | "
+                    f"👤 {emp_name} | 🆔 {emp_code} | "
+                    f"📏 Khoảng cách: {distance:.3f} | "
+                    f"⏰ {now.strftime('%H:%M:%S - %d/%m/%Y')} | "
+                    f"📍 {action}"
+                )
                 self._last_scan_emp_id = emp_id
                 self._last_scan_time = now
             else:
-                self.att_status.set(msg)
+                self._finish_scan(f"❌ Lỗi: {msg}")
         except Exception as e:
-            self.att_status.set(f"Lỗi ghi CSDL: {e}")
+            self._finish_scan(f"❌ Lỗi hệ thống: {e}")
+    
+    def _finish_scan(self, message: str):
+        """Kết thúc quá trình quét"""
+        self._is_scanning = False
+        self.att_status.set(message)
 
-    # ---------- Lifecycle ----------
+    # ==================== LIFECYCLE ====================
+    
     def on_close(self):
-        """Tắt camera và hủy cửa sổ"""
-        self.stop_camera()
+        """Đóng cửa sổ"""
+        self._updating = False
+        if self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+            self.cap = None
         self.destroy()
+
+
+# ==================== MAIN ====================
+
+if __name__ == "__main__":
+    app = KioskWindow()
+    app.mainloop()

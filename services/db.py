@@ -1,7 +1,7 @@
 # services/db.py
 """
 Module xử lý Database cho Hệ thống Chấm công Nhận diện Khuôn mặt
-
+Sử dụng MySQL với Connection Pooling
 """
 
 import io
@@ -13,28 +13,46 @@ import pandas as pd
 import bcrypt
 
 import mysql.connector
-from mysql.connector import Error
+from mysql.connector import Error, pooling
+
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import DB_CONFIG
 
 # ============================================================================
-# CẤU HÌNH MYSQL
+# CONNECTION POOL
 # ============================================================================
-DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "duc123",
-    "database": "face_attendance",
-    "charset": "utf8mb4",
-    "use_unicode": True,
-}
+_connection_pool = None
 
-# ============================================================================
-# KẾT NỐI DATABASE
-# ============================================================================
+def _init_pool():
+    """Khởi tạo connection pool"""
+    global _connection_pool
+    if _connection_pool is None:
+        try:
+            pool_config = DB_CONFIG.copy()
+            pool_size = pool_config.pop('pool_size', 5)
+            pool_reset = pool_config.pop('pool_reset_session', True)
+            
+            _connection_pool = pooling.MySQLConnectionPool(
+                pool_name="face_attendance_pool",
+                pool_size=pool_size,
+                pool_reset_session=pool_reset,
+                **pool_config
+            )
+            print(f"✅ Connection pool đã được khởi tạo (size={pool_size})")
+        except Error as e:
+            raise RuntimeError(f"❌ Lỗi tạo connection pool: {e}")
 
 def get_conn():
-    """Tạo kết nối MySQL"""
+    """Lấy kết nối MySQL từ pool"""
+    global _connection_pool
+    if _connection_pool is None:
+        _init_pool()
+    
     try:
-        return mysql.connector.connect(**DB_CONFIG)
+        return _connection_pool.get_connection()
     except Error as e:
         raise RuntimeError(f"❌ Lỗi kết nối MySQL: {e}")
 
@@ -45,13 +63,88 @@ def get_conn():
 
 def init_db():
     """
-    Khởi tạo database lần đầu
-    Chỉ INSERT tài khoản admin mặc định với password đã hash
+    Khởi tạo database:
+    - Tạo các bảng nếu chưa tồn tại
+    - Tạo tài khoản admin mặc định
     """
     con = get_conn()
+    cur = con.cursor()
+    
     try:
-        cur = con.cursor()
+        # 1. Bảng users
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                password VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_username (username)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+
+        # 2. Bảng employees
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS employees (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                emp_code VARCHAR(50) UNIQUE NOT NULL,
+                name VARCHAR(100) NOT NULL,
+                department VARCHAR(100),
+                phone VARCHAR(20),
+                embedding LONGBLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_emp_code (emp_code),
+                INDEX idx_name (name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+
+        # 3. Bảng attendance
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS attendance (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                emp_id INT NOT NULL,
+                ts TIMESTAMP NOT NULL,
+                device VARCHAR(50),
+                scan_type ENUM('IN', 'OUT') NOT NULL DEFAULT 'IN',
+                FOREIGN KEY (emp_id) REFERENCES employees(id) ON DELETE CASCADE,
+                INDEX idx_emp_ts (emp_id, ts),
+                INDEX idx_date (ts),
+                INDEX idx_scan_type (scan_type)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+
+        # 4. Bảng employee_leave
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS employee_leave (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                emp_id INT NOT NULL,
+                leave_date DATE NOT NULL,
+                reason VARCHAR(255) DEFAULT 'Nghỉ phép',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (emp_id) REFERENCES employees(id) ON DELETE CASCADE,
+                UNIQUE KEY unique_emp_leave (emp_id, leave_date),
+                INDEX idx_leave_date (leave_date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+
+        # 5. View v_leave_detail
+        cur.execute("""
+            CREATE OR REPLACE VIEW v_leave_detail AS
+            SELECT 
+                el.id,
+                el.emp_id,
+                e.emp_code,
+                e.name AS emp_name,
+                e.department,
+                el.leave_date,
+                el.reason,
+                el.created_at
+            FROM employee_leave el
+            JOIN employees e ON el.emp_id = e.id
+        """)
+
+        con.commit()
         
+        # 6. Tạo admin user
         cur.execute("SELECT COUNT(*) FROM users WHERE username=%s", ("admin",))
         count = cur.fetchone()[0]
         
@@ -64,12 +157,18 @@ def init_db():
                 ("admin", hashed.decode('utf-8'))
             )
             con.commit()
-            print("✅ Đã tạo tài khoản admin mặc định (admin/admin123)")
+            print("✅ Đã tạo schema database và tài khoản admin (admin/admin123)")
+        else:
+            print("✅ Database đã được khởi tạo")
         
+    except Exception as e:
+        print(f"❌ Lỗi init_db: {e}")
+        con.rollback()
+        raise
     finally:
         try:
             cur.close()
-        except Exception:
+        except:
             pass
         con.close()
 
@@ -175,8 +274,10 @@ def add_employee(emp_code: str, name: str, department: str,
         con.commit()
         return True, "✅ Đã thêm nhân viên."
     except mysql.connector.IntegrityError:
+        con.rollback()
         return False, "❌ Mã nhân viên đã tồn tại."
     except Exception as e:
+        con.rollback()
         return False, f"❌ Lỗi: {e}"
     finally:
         try:
@@ -270,6 +371,7 @@ def mark_attendance(emp_id: int, device: str = "KIOSK-01") -> Tuple[bool, str, s
         return True, f"✅ Chấm công {action} thành công!", scan_type
         
     except Exception as e:
+        con.rollback()
         return False, f"❌ Lỗi ghi chấm công: {e}", ""
     finally:
         try:
@@ -394,8 +496,10 @@ def add_leave(emp_id: int, leave_date: dt.date,
         return True, f"✅ Đã thêm ngày nghỉ phép: {leave_date.strftime('%d/%m/%Y')}"
         
     except mysql.connector.IntegrityError:
+        con.rollback()
         return False, f"❌ Nhân viên đã có lịch nghỉ vào ngày {leave_date.strftime('%d/%m/%Y')}"
     except Exception as e:
+        con.rollback()
         return False, f"❌ Lỗi: {e}"
     finally:
         try:
@@ -463,6 +567,7 @@ def delete_leave(leave_id: int) -> Tuple[bool, str]:
         return False, "❌ Không tìm thấy bản ghi"
         
     except Exception as e:
+        con.rollback()
         return False, f"❌ Lỗi xóa: {e}"
     finally:
         try:
