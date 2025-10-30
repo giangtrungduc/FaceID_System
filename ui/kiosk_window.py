@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Cửa sổ Kiosk Chấm công - Giao diện đơn giản, Logic đầy đủ
+ĐÃ CẬP NHẬT: Giới hạn 2 lần chấm công/ngày (1 VÀO + 1 RA)
 """
 
 import tkinter as tk
@@ -181,7 +182,7 @@ class KioskWindow(tk.Tk):
             self.after(200, self._perform_scan)
     
     def _perform_scan(self):
-        """Thực hiện quét và nhận diện"""
+        """Thực hiện quét và nhận diện - ĐÃ CẬP NHẬT LOGIC"""
         tol = float(self.scale_tol.get())
         
         # Đọc frame
@@ -255,22 +256,34 @@ class KioskWindow(tk.Tk):
         except Exception:
             pass
         
-        # Ghi nhận chấm công
+        # ===== GHI NHẬN CHẤM CÔNG - LOGIC MỚI =====
         self.att_status.set("💾 Đang lưu dữ liệu...")
         self.update()
         
         try:
             result = db.mark_attendance(emp_id)
             
-            # Xử lý kết quả trả về
+            # Xử lý kết quả trả về (hỗ trợ cả tuple và giá trị đơn)
             if isinstance(result, tuple):
-                ok, msg, scan_type = result
+                if len(result) >= 3:
+                    # Định dạng mới: (ok, msg, scan_type)
+                    ok, msg, scan_type = result
+                elif len(result) >= 2:
+                    # Định dạng không có scan_type
+                    ok, msg = result
+                    scan_type = 'IN'
+                else:
+                    ok = result[0]
+                    msg = 'Thành công'
+                    scan_type = 'IN'
             else:
-                ok = result
+                # Định dạng cũ: chỉ trả về boolean
+                ok = bool(result)
+                msg = 'Chấm công thành công'
                 scan_type = 'IN'
-                msg = 'Thành công'
             
             if ok:
+                # ===== CHẤM CÔNG THÀNH CÔNG =====
                 icon = "🟢" if scan_type == 'IN' else "🔴"
                 action = "VÀO LÀM" if scan_type == 'IN' else "TAN LÀM"
                 
@@ -279,13 +292,33 @@ class KioskWindow(tk.Tk):
                     f"👤 {emp_name} | 🆔 {emp_code} | "
                     f"📏 Khoảng cách: {distance:.3f} | "
                     f"⏰ {now.strftime('%H:%M:%S - %d/%m/%Y')} | "
-                    f"📍 {action}"
+                    f"📍 {action} | "
+                    f"{msg}"
                 )
                 self._last_scan_emp_id = emp_id
                 self._last_scan_time = now
+                
             else:
-                self._finish_scan(f"❌ Lỗi: {msg}")
+                # ===== BỊ TỪ CHỐI =====
+                # Kiểm tra loại lỗi
+                msg_upper = msg.upper()
+                
+                if any(keyword in msg_upper for keyword in ["ĐÃ ĐỦ", "CHẶN", "BẤT THƯỜNG", "2 LẦN"]):
+                    # Lỗi nghiệp vụ: Đã đủ 2 lần chấm công
+                    self._finish_scan(
+                        f"⛔ {emp_name} ({emp_code}) | {msg}"
+                    )
+                    # Vẫn set cooldown để tránh spam
+                    self._last_scan_emp_id = emp_id
+                    self._last_scan_time = now
+                else:
+                    # Lỗi hệ thống khác
+                    self._finish_scan(f"❌ Lỗi: {msg}")
+                    
         except Exception as e:
+            # Lỗi exception
+            import traceback
+            traceback.print_exc()
             self._finish_scan(f"❌ Lỗi hệ thống: {e}")
     
     def _finish_scan(self, message: str):

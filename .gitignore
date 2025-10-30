@@ -1,0 +1,42 @@
+# Tên file: .gitignore
+
+# --- 1. File nhạy cảm & Môi trường ---
+# Bỏ qua file chứa biến môi trường (như mật khẩu MySQL)
+.env
+
+# --- 2. Thư mục môi trường ảo Python ---
+# Tên phổ biến cho virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# --- 3. File cache và bytecode của Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+# --- 5. File của IDE/Editor ---
+# Visual Studio Code
+.vscode/
+# PyCharm
+.idea/
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# --- 6. File hệ thống (macOS, Windows) ---
+.DS_Store
+Thumbs.db
+
+
+# --- 8. File Log và Dữ liệu tạm ---
+*.log
+*.tmp
+*.bak
+
+# --- 9. File xuất báo cáo (Tùy chọn) ---
+# Nếu bạn có 1 thư mục riêng để lưu các file CSV đã xuất
+/exported_reports/

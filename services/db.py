@@ -317,6 +317,47 @@ def get_all_employees() -> pd.DataFrame:
 # CHẤM CÔNG - LOGIC IN/OUT
 # ============================================================================
 
+def get_attendance_count_today(emp_id: int) -> Dict:
+    """
+    Đếm số lần chấm công hôm nay và lấy thông tin
+    """
+    con = get_conn()
+    cur = con.cursor(dictionary=True)
+    try:
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN scan_type = 'IN' THEN 1 ELSE 0 END) as in_count,
+                SUM(CASE WHEN scan_type = 'OUT' THEN 1 ELSE 0 END) as out_count
+            FROM attendance
+            WHERE emp_id = %s AND DATE(ts) = CURDATE()
+        """, (emp_id,))
+        
+        counts = cur.fetchone()
+
+         # Lấy lần quét cuối
+        cur.execute("""
+            SELECT scan_type, ts
+            FROM attendance
+            WHERE emp_id = %s AND DATE(ts) = CURDATE()
+            ORDER BY ts DESC
+            LIMIT 1
+        """, (emp_id,))
+        
+        last_scan = cur.fetchone()
+
+        return{
+            'total': counts['total'] or 0,
+            'in_count': counts['in_count'] or 0,
+            'out_count': counts['out_count'] or 0,
+            'last_scan': last_scan
+        }
+    finally:
+        try:
+            cur.close()
+        finally:
+            con.close()
+
 def get_last_scan_today(emp_id: int) -> Optional[Dict]:
     """Lấy lần quét cuối cùng hôm nay"""
     con = get_conn()
@@ -346,29 +387,84 @@ def determine_scan_type(emp_id: int) -> str:
     - Lần cuối IN -> OUT
     - Lần cuối OUT -> IN
     """
-    last_scan = get_last_scan_today(emp_id)
+    attendance_info = get_attendance_count_today(emp_id)
     
-    if last_scan is None:
-        return 'IN'
+    total = attendance_info['total']
+    in_count = attendance_info['in_count']
+    out_count = attendance_info['out_count']
+    last_scan = attendance_info['last_scan']
     
-    return 'OUT' if last_scan['scan_type'] == 'IN' else 'IN'
+    # ===== TRƯỜNG HỢP 1: Chưa chấm công lần nào =====
+    if total == 0:
+        return 'IN', ''
+    
+    # ===== TRƯỜNG HỢP 2: Đã đủ 2 lần (1 IN + 1 OUT) → CHẶN =====
+    if in_count >= 1 and out_count >= 1:
+        last_time = last_scan['ts'].strftime('%H:%M:%S') if last_scan else ''
+        return 'BLOCKED', (
+            f"⛔ ĐÃ ĐỦ 2 LẦN CHẤM CÔNG HÔM NAY\n\n"
+            f"• Lần VÀO: ✅ Đã chấm\n"
+            f"• Lần RA: ✅ Đã chấm\n"
+            f"• Lần cuối: {last_time}\n\n"
+            f"❌ Không thể chấm công thêm.\n"
+            f"Liên hệ quản trị viên nếu có vấn đề."
+        )
+    
+    # ===== TRƯỜNG HỢP 3: Đã VÀO, chưa RA → CHO PHÉP RA =====
+    if last_scan and last_scan['scan_type'] == 'IN':
+        return 'OUT', ''
+    
+    # ===== TRƯỜNG HỢP 4: Đã RA nhưng chưa VÀO (BẤT THƯỜNG) =====
+    # Điều này có thể xảy ra nếu admin sửa dữ liệu trực tiếp trong DB
+    if last_scan and last_scan['scan_type'] == 'OUT':
+        return 'BLOCKED', (
+            f"⚠️ DỮ LIỆU BẤT THƯỜNG\n\n"
+            f"Hệ thống phát hiện bạn đã chấm công RA\n"
+            f"nhưng chưa có lần VÀO hôm nay.\n\n"
+            f"Vui lòng liên hệ quản trị viên để kiểm tra."
+        )
+    
+    # ===== MẶC ĐỊNH: CHO PHÉP VÀO =====
+    return 'IN', ''
 
 
 def mark_attendance(emp_id: int, device: str = "KIOSK-01") -> Tuple[bool, str, str]:
-    """Ghi nhận chấm công tự động IN/OUT"""
+    """
+    Ghi nhận chấm công với giới hạn 2 lần/ngày
+    
+    Returns:
+        Tuple[bool, str, str]: (success, message, scan_type)
+    """
     con = get_conn()
     cur = con.cursor()
     try:
-        scan_type = determine_scan_type(emp_id)
+        # Xác định loại chấm công
+        scan_type, error_msg = determine_scan_type(emp_id)
         
+        # Nếu bị chặn
+        if scan_type == 'BLOCKED':
+            return False, error_msg, ''
+        
+        # Ghi nhận chấm công
         cur.execute("""
             INSERT INTO attendance(emp_id, ts, device, scan_type)
             VALUES (%s, %s, %s, %s)
         """, (emp_id, dt.datetime.now(), device, scan_type))
         con.commit()
         
-        action = "VÀO" if scan_type == 'IN' else "RA"
-        return True, f"✅ Chấm công {action} thành công!", scan_type
+        # Tạo thông báo thành công
+        action = "VÀO LÀM" if scan_type == 'IN' else "TAN LÀM"
+        
+        # Lấy thông tin sau khi chấm
+        attendance_info = get_attendance_count_today(emp_id)
+        current_count = attendance_info['in_count'] + attendance_info['out_count']
+        
+        success_msg = (
+            f"✅ CHẤM CÔNG {action} THÀNH CÔNG!\n\n"
+            f"📊 Đã chấm: {current_count}/2 lần hôm nay"
+        )
+        
+        return True, success_msg, scan_type
         
     except Exception as e:
         con.rollback()
