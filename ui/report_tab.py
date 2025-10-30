@@ -1,5 +1,5 @@
 """
-Tab báo cáo chấm công
+Tab báo cáo chấm công - CÓ TÍNH CÔNG THEO GIỜ
 """
 
 import datetime as dt
@@ -12,9 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import db
-
-# Giờ làm việc tiêu chuẩn để check đi muộn
-DEFAULT_WORK_START_TIME = dt.time(8, 30, 0)
+from config import DEFAULT_WORK_START_TIME, MIN_WORK_HOURS_FOR_FULL_DAY
 
 class ReportTab(ttk.Frame):
     """Tab báo cáo chấm công"""
@@ -59,8 +57,9 @@ class ReportTab(ttk.Frame):
         daily_frame = ttk.Frame(self.nb)
         self.nb.add(daily_frame, text="📅 Báo cáo chi tiết")
 
+        # Thêm cột "Công" vào báo cáo chi tiết
         cols_daily = ("emp_code", "name", "department", "date", 
-                      "status", "first_in", "last_out", "hours")
+                      "status", "scans", "first_in", "last_out", "hours", "work_day")
         
         self.tree_daily = ttk.Treeview(daily_frame, columns=cols_daily, show="headings", height=20)
         
@@ -69,18 +68,22 @@ class ReportTab(ttk.Frame):
         self.tree_daily.heading("department", text="Phòng ban")
         self.tree_daily.heading("date", text="Ngày")
         self.tree_daily.heading("status", text="Trạng thái")
+        self.tree_daily.heading("scans", text="Số lần")
         self.tree_daily.heading("first_in", text="Giờ vào")
         self.tree_daily.heading("last_out", text="Giờ ra")
         self.tree_daily.heading("hours", text="Giờ làm")
+        self.tree_daily.heading("work_day", text="Công")
         
         self.tree_daily.column("emp_code", width=80, anchor="center")
         self.tree_daily.column("name", width=150)
         self.tree_daily.column("department", width=120)
         self.tree_daily.column("date", width=100, anchor="center")
-        self.tree_daily.column("status", width=100, anchor="center")
-        self.tree_daily.column("first_in", width=100, anchor="center")
-        self.tree_daily.column("last_out", width=100, anchor="center")
-        self.tree_daily.column("hours", width=80, anchor="center")
+        self.tree_daily.column("status", width=120, anchor="center")
+        self.tree_daily.column("scans", width=60, anchor="center")
+        self.tree_daily.column("first_in", width=80, anchor="center")
+        self.tree_daily.column("last_out", width=80, anchor="center")
+        self.tree_daily.column("hours", width=70, anchor="center")
+        self.tree_daily.column("work_day", width=60, anchor="center")
         
         self.tree_daily.pack(fill="both", expand=True, padx=5, pady=5)
 
@@ -89,23 +92,25 @@ class ReportTab(ttk.Frame):
         self.nb.add(total_frame, text="📊 Báo cáo tổng hợp")
 
         cols_total = ("emp_code", "name", "department", 
-                      "days_present", "days_leave", "days_absent", "total_hours")
+                      "total_work_days", "days_leave", "days_insufficient", "days_absent", "total_hours")
                       
         self.tree_total = ttk.Treeview(total_frame, columns=cols_total, show="headings", height=20)
         
         self.tree_total.heading("emp_code", text="Mã NV")
         self.tree_total.heading("name", text="Họ tên")
         self.tree_total.heading("department", text="Phòng ban")
-        self.tree_total.heading("days_present", text="Ngày công")
+        self.tree_total.heading("total_work_days", text="Ngày công")
         self.tree_total.heading("days_leave", text="Ngày phép")
+        self.tree_total.heading("days_insufficient", text="Ngày thiếu giờ")
         self.tree_total.heading("days_absent", text="Ngày vắng")
         self.tree_total.heading("total_hours", text="Tổng giờ làm")
         
         self.tree_total.column("emp_code", width=90, anchor="center")
         self.tree_total.column("name", width=180)
         self.tree_total.column("department", width=130)
-        self.tree_total.column("days_present", width=100, anchor="center")
+        self.tree_total.column("total_work_days", width=100, anchor="center")
         self.tree_total.column("days_leave", width=100, anchor="center")
+        self.tree_total.column("days_insufficient", width=120, anchor="center")
         self.tree_total.column("days_absent", width=100, anchor="center")
         self.tree_total.column("total_hours", width=120, anchor="center")
         
@@ -130,23 +135,50 @@ class ReportTab(ttk.Frame):
             tree.insert("", "end", values=list(row))
 
     def _apply_status(self, row):
-        """Xác định trạng thái"""
+        """Xác định trạng thái - CÓ KIỂM TRA SỐ GIỜ"""
         # Ưu tiên 1: Nghỉ phép
         if pd.notna(row['leave_date']):
             return "🏖️ Nghỉ phép"
         
-        # Ưu tiên 2: Có mặt
+        # Ưu tiên 2: Có giờ làm
         if pd.notna(row['hours']) and row['hours'] > 0:
-            # Check đi muộn
-            if pd.notna(row['first_in']) and row['first_in'].time() > DEFAULT_WORK_START_TIME:
-                return "⚠️ Đi muộn"
-            return "✅ Có mặt"
+            # Kiểm tra đủ giờ chưa
+            if row['hours'] >= MIN_WORK_HOURS_FOR_FULL_DAY:
+                # Đủ giờ, check đi muộn
+                if pd.notna(row['first_in']) and row['first_in'].time() > DEFAULT_WORK_START_TIME:
+                    return "⚠️ Đi muộn"
+                return "✅ Đủ công"
+            else:
+                # Thiếu giờ
+                return f"⚠️ Thiếu giờ ({row['hours']:.1f}h)"
         
-        # Ưu tiên 3: Vắng
+        # Ưu tiên 3: Có IN nhưng thiếu OUT
+        if pd.notna(row.get('scans')) and row['scans'] == 1:
+            return "❌ Thiếu checkout"
+        
+        # Ưu tiên 4: Vắng
         return "❌ Vắng"
 
+    def _calculate_work_day(self, row):
+        """
+        Tính ngày công:
+        - Nghỉ phép: 0 công (hoặc có thể tính riêng)
+        - Đủ giờ (>= MIN_WORK_HOURS): 1 công
+        - Thiếu giờ/Vắng: 0 công
+        """
+        # Nghỉ phép
+        if pd.notna(row['leave_date']):
+            return 0  # Hoặc 'P' nếu muốn đánh dấu phép
+        
+        # Đủ giờ
+        if pd.notna(row['hours']) and row['hours'] >= MIN_WORK_HOURS_FOR_FULL_DAY:
+            return 1
+        
+        # Các trường hợp khác
+        return 0
+
     def load_reports(self):
-        """Tải và tổng hợp báo cáo"""
+        """Tải và tổng hợp báo cáo - CÓ TÍNH CÔNG"""
         s = self.parse_date(self.start_var.get().strip())
         e = self.parse_date(self.end_var.get().strip())
         
@@ -173,7 +205,7 @@ class ReportTab(ttk.Frame):
                 return
 
         try:
-            # === 1. Tải 3 nguồn dữ liệu ===
+            # === 1. Tải dữ liệu ===
             all_emps_df = db.get_all_employees()
             if all_emps_df.empty:
                 messagebox.showinfo("Thông báo", "Không có nhân viên nào trong hệ thống.")
@@ -201,13 +233,14 @@ class ReportTab(ttk.Frame):
                 work_hours_df['date'] = pd.to_datetime(work_hours_df['date'])
                 daily_report_df = pd.merge(
                     daily_report_df,
-                    work_hours_df[['emp_id', 'date', 'first_in', 'last_out', 'hours']],
+                    work_hours_df[['emp_id', 'date', 'first_in', 'last_out', 'scans', 'hours']],
                     on=['emp_id', 'date'],
                     how='left'
                 )
             else:
                 daily_report_df['first_in'] = pd.NaT
                 daily_report_df['last_out'] = pd.NaT
+                daily_report_df['scans'] = 0
                 daily_report_df['hours'] = 0.0
 
             if not leave_df.empty:
@@ -221,34 +254,45 @@ class ReportTab(ttk.Frame):
             else:
                 daily_report_df['leave_date'] = pd.NaT
 
-            # === 4. Áp dụng Logic Trạng thái ===
+            # === 4. Áp dụng Logic ===
             daily_report_df['status'] = daily_report_df.apply(self._apply_status, axis=1)
-            
-            daily_report_df.loc[daily_report_df['status'].str.contains('Vắng|phép', na=False), 'hours'] = 0.0
+            daily_report_df['work_day'] = daily_report_df.apply(self._calculate_work_day, axis=1)
             
             daily_report_df['hours'] = daily_report_df['hours'].fillna(0).round(2)
+            daily_report_df['scans'] = daily_report_df['scans'].fillna(0).astype(int)
             daily_report_df['first_in'] = daily_report_df['first_in'].dt.strftime('%H:%M:%S').fillna('')
             daily_report_df['last_out'] = daily_report_df['last_out'].dt.strftime('%H:%M:%S').fillna('')
             daily_report_df['date'] = daily_report_df['date'].dt.strftime('%Y-%m-%d')
             
             self._daily_df = daily_report_df[[
                 "emp_code", "name", "department", "date", 
-                "status", "first_in", "last_out", "hours"
+                "status", "scans", "first_in", "last_out", "hours", "work_day"
             ]].sort_values(['date', 'emp_code'], ascending=[False, True])
             
-            # === 5. Tạo Báo cáo Tổng hợp ===
+            # === 5. Báo cáo Tổng hợp ===
             total_report = []
             for emp_id, group in daily_report_df.groupby('emp_id'):
                 r = group.iloc[0]
                 status_counts = group['status'].value_counts()
                 
+                # Đếm các loại ngày
+                days_leave = status_counts.get('🏖️ Nghỉ phép', 0)
+                days_absent = status_counts.get('❌ Vắng', 0) + status_counts.get('❌ Thiếu checkout', 0)
+                
+                # Đếm ngày thiếu giờ (bắt đầu bằng "⚠️ Thiếu giờ")
+                days_insufficient = sum(1 for status in group['status'] if '⚠️ Thiếu giờ' in status)
+                
+                # Tổng ngày công (work_day = 1)
+                total_work_days = group['work_day'].sum()
+                
                 total_report.append({
                     "emp_code": r['emp_code'],
                     "name": r['name'],
                     "department": r['department'],
-                    "days_present": status_counts.get('✅ Có mặt', 0) + status_counts.get('⚠️ Đi muộn', 0),
-                    "days_leave": status_counts.get('🏖️ Nghỉ phép', 0),
-                    "days_absent": status_counts.get('❌ Vắng', 0),
+                    "total_work_days": total_work_days,
+                    "days_leave": days_leave,
+                    "days_insufficient": days_insufficient,
+                    "days_absent": days_absent,
                     "total_hours": group['hours'].sum().round(2)
                 })
             
@@ -262,11 +306,14 @@ class ReportTab(ttk.Frame):
                 "Hoàn thành", 
                 f"Đã tải báo cáo thành công!\n\n"
                 f"Số bản ghi: {len(self._daily_df)}\n"
-                f"Số nhân viên: {len(self._total_df)}"
+                f"Số nhân viên: {len(self._total_df)}\n\n"
+                f"⚠️ Quy định: Tối thiểu {MIN_WORK_HOURS_FOR_FULL_DAY}h mới tính công"
             )
 
         except Exception as e:
             messagebox.showerror("Lỗi nghiêm trọng", f"Không thể tạo báo cáo:\n\n{e}")
+            import traceback
+            traceback.print_exc()
 
     def export_daily_csv(self):
         """Xuất báo cáo chi tiết"""

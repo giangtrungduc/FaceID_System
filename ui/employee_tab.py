@@ -1,5 +1,5 @@
 """
-Tab quản lý nhân viên
+Tab quản lý nhân viên - Có chức năng Thêm/Sửa/Xóa
 """
 
 import tkinter as tk
@@ -17,6 +17,10 @@ class EmployeeTab(ttk.Frame):
     """Tab quản lý nhân viên"""
     def __init__(self, master):
         super().__init__(master)
+
+        # ===== TRẠNG THÁI =====
+        self._edit_mode = False  # False = Thêm mới, True = Sửa
+        self._edit_emp_id = None  # ID nhân viên đang sửa
 
         # ===== Layout chính: 2 cột =====
         self.columnconfigure(0, weight=3)  # List
@@ -69,13 +73,19 @@ class EmployeeTab(ttk.Frame):
         
         ttk.Button(
             btn_frame, 
+            text="✏️ Sửa nhân viên đã chọn", 
+            command=self.edit_selected_employee
+        ).pack(side="left", padx=4)
+        
+        ttk.Button(
+            btn_frame, 
             text="🗑️ Xóa nhân viên đã chọn", 
             command=self.delete_selected_employee
         ).pack(side="left", padx=4)
 
-        # ===== Panel thêm mới (Bên phải) =====
-        form = ttk.LabelFrame(self, text="➕ Thêm nhân viên mới", padding=15)
-        form.grid(row=0, column=1, sticky="nsew", padx=(5, 10), pady=10)
+        # ===== Panel form (Bên phải) =====
+        self.form_frame = ttk.LabelFrame(self, text="➕ Thêm nhân viên mới", padding=15)
+        self.form_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 10), pady=10)
 
         self.emp_code_var = tk.StringVar()
         self.emp_name_var = tk.StringVar()
@@ -86,50 +96,53 @@ class EmployeeTab(ttk.Frame):
         # Form fields
         row = 0
         
-        ttk.Label(form, text="Mã nhân viên: *").grid(
+        ttk.Label(self.form_frame, text="Mã nhân viên: *").grid(
             row=row, column=0, sticky="w", pady=6
         )
-        ttk.Entry(form, textvariable=self.emp_code_var, width=28).grid(
+        self.emp_code_entry = ttk.Entry(
+            self.form_frame, 
+            textvariable=self.emp_code_var, 
+            width=28
+        )
+        self.emp_code_entry.grid(row=row, column=1, columnspan=2, sticky="ew", pady=6)
+        row += 1
+
+        ttk.Label(self.form_frame, text="Họ và tên: *").grid(
+            row=row, column=0, sticky="w", pady=6
+        )
+        ttk.Entry(self.form_frame, textvariable=self.emp_name_var, width=28).grid(
             row=row, column=1, columnspan=2, sticky="ew", pady=6
         )
         row += 1
 
-        ttk.Label(form, text="Họ và tên: *").grid(
+        ttk.Label(self.form_frame, text="Phòng ban:").grid(
             row=row, column=0, sticky="w", pady=6
         )
-        ttk.Entry(form, textvariable=self.emp_name_var, width=28).grid(
+        ttk.Entry(self.form_frame, textvariable=self.emp_dept_var, width=28).grid(
             row=row, column=1, columnspan=2, sticky="ew", pady=6
         )
         row += 1
 
-        ttk.Label(form, text="Phòng ban:").grid(
+        ttk.Label(self.form_frame, text="Số điện thoại:").grid(
             row=row, column=0, sticky="w", pady=6
         )
-        ttk.Entry(form, textvariable=self.emp_dept_var, width=28).grid(
+        ttk.Entry(self.form_frame, textvariable=self.phone_var, width=28).grid(
             row=row, column=1, columnspan=2, sticky="ew", pady=6
         )
         row += 1
 
-        ttk.Label(form, text="Số điện thoại:").grid(
-            row=row, column=0, sticky="w", pady=6
-        )
-        ttk.Entry(form, textvariable=self.phone_var, width=28).grid(
-            row=row, column=1, columnspan=2, sticky="ew", pady=6
-        )
-        row += 1
-
-        ttk.Label(form, text="Ảnh khuôn mặt: *").grid(
+        ttk.Label(self.form_frame, text="Ảnh khuôn mặt: *").grid(
             row=row, column=0, sticky="w", pady=6
         )
         ttk.Entry(
-            form, 
+            self.form_frame, 
             textvariable=self.face_path_var, 
             width=20,
             state="readonly"
         ).grid(row=row, column=1, sticky="ew", pady=6)
         
         ttk.Button(
-            form, 
+            self.form_frame, 
             text="📁", 
             command=self.browse_face_image,
             width=3
@@ -137,26 +150,36 @@ class EmployeeTab(ttk.Frame):
         row += 1
 
         # Note
-        note_label = ttk.Label(
-            form,
-            text="* Bắt buộc\n\nLưu ý: Ảnh khuôn mặt cần:\n"
+        self.note_label = ttk.Label(
+            self.form_frame,
+            text="* Bắt buộc khi thêm mới\n\nLưu ý: Ảnh khuôn mặt cần:\n"
                  "- Rõ nét, nhìn thẳng\n"
                  "- Ánh sáng tốt\n"
                  "- Chỉ 1 người trong ảnh",
             foreground="#64748b",
             font=("Segoe UI", 9)
         )
-        note_label.grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 10))
+        self.note_label.grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 10))
         row += 1
 
         # Save button
-        ttk.Button(
-            form, 
+        self.save_button = ttk.Button(
+            self.form_frame, 
             text="💾 Lưu nhân viên", 
-            command=self.save_employee_from_file
-        ).grid(row=row, column=0, columnspan=3, pady=(10, 0), sticky="ew")
+            command=self.save_employee
+        )
+        self.save_button.grid(row=row, column=0, columnspan=3, pady=(5, 0), sticky="ew")
+        row += 1
 
-        form.columnconfigure(1, weight=1)
+        # Cancel button (chỉ hiện khi đang sửa)
+        self.cancel_button = ttk.Button(
+            self.form_frame,
+            text="❌ Hủy",
+            command=self.cancel_edit
+        )
+        # Không grid ngay, chỉ hiện khi edit
+
+        self.form_frame.columnconfigure(1, weight=1)
 
         # Load data lần đầu
         self.after(100, self.refresh_employees)
@@ -198,8 +221,102 @@ class EmployeeTab(ttk.Frame):
         if fpath:
             self.face_path_var.set(fpath)
 
-    def save_employee_from_file(self):
-        """Lưu nhân viên mới"""
+    def edit_selected_employee(self):
+        """Chuyển sang chế độ sửa nhân viên đã chọn"""
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning(
+                "Chưa chọn", 
+                "Vui lòng chọn nhân viên cần sửa."
+            )
+            return
+        
+        vals = self.tree.item(sel[0], "values")
+        emp_id = int(vals[0])
+        
+        # Lấy thông tin chi tiết
+        try:
+            emp = db.get_employee_by_id(emp_id)
+            if not emp:
+                messagebox.showerror("Lỗi", "Không tìm thấy nhân viên.")
+                return
+            
+            # Chuyển sang chế độ sửa
+            self._edit_mode = True
+            self._edit_emp_id = emp_id
+            
+            # Đổi title form
+            self.form_frame.config(text=f"✏️ Sửa nhân viên: {emp['emp_code']}")
+            
+            # Điền thông tin vào form
+            self.emp_code_var.set(emp['emp_code'])
+            self.emp_name_var.set(emp['name'])
+            self.emp_dept_var.set(emp.get('department', ''))
+            self.phone_var.set(emp.get('phone', ''))
+            self.face_path_var.set("")  # Để trống, nếu không chọn ảnh mới = giữ nguyên
+            
+            # Disable mã NV (không cho sửa)
+            self.emp_code_entry.config(state="disabled")
+            
+            # Thay đổi note
+            self.note_label.config(
+                text="📝 Chế độ SỬA:\n\n"
+                     "• Mã NV không thể thay đổi\n"
+                     "• Nếu không chọn ảnh mới,\n"
+                     "  hệ thống sẽ giữ nguyên ảnh cũ\n"
+                     "• Các trường khác có thể sửa"
+            )
+            
+            # Đổi text nút
+            self.save_button.config(text="💾 Cập nhật")
+            
+            # Hiện nút Hủy
+            self.cancel_button.grid(row=7, column=0, columnspan=3, pady=(5, 0), sticky="ew")
+            
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể tải thông tin nhân viên: {e}")
+
+    def cancel_edit(self):
+        """Hủy chế độ sửa, quay về thêm mới"""
+        self._edit_mode = False
+        self._edit_emp_id = None
+        
+        # Đổi title
+        self.form_frame.config(text="➕ Thêm nhân viên mới")
+        
+        # Clear form
+        self.emp_code_var.set("")
+        self.emp_name_var.set("")
+        self.emp_dept_var.set("")
+        self.phone_var.set("")
+        self.face_path_var.set("")
+        
+        # Enable lại mã NV
+        self.emp_code_entry.config(state="normal")
+        
+        # Đổi note
+        self.note_label.config(
+            text="* Bắt buộc khi thêm mới\n\nLưu ý: Ảnh khuôn mặt cần:\n"
+                 "- Rõ nét, nhìn thẳng\n"
+                 "- Ánh sáng tốt\n"
+                 "- Chỉ 1 người trong ảnh"
+        )
+        
+        # Đổi text nút
+        self.save_button.config(text="💾 Lưu nhân viên")
+        
+        # Ẩn nút Hủy
+        self.cancel_button.grid_forget()
+
+    def save_employee(self):
+        """Lưu nhân viên (Thêm mới hoặc Cập nhật)"""
+        if self._edit_mode:
+            self._update_employee()
+        else:
+            self._add_new_employee()
+
+    def _add_new_employee(self):
+        """Thêm nhân viên mới"""
         code = self.emp_code_var.get().strip()
         name = self.emp_name_var.get().strip()
         dept = self.emp_dept_var.get().strip()
@@ -241,6 +358,45 @@ class EmployeeTab(ttk.Frame):
                 self.emp_dept_var.set("")
                 self.phone_var.set("")
                 self.face_path_var.set("")
+            else:
+                messagebox.showerror("Lỗi", msg)
+                
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Lỗi xử lý: {e}")
+
+    def _update_employee(self):
+        """Cập nhật thông tin nhân viên"""
+        name = self.emp_name_var.get().strip()
+        dept = self.emp_dept_var.get().strip()
+        phone = self.phone_var.get().strip()
+        fpath = self.face_path_var.get().strip()
+
+        if not name:
+            messagebox.showwarning("Thiếu thông tin", "Vui lòng nhập họ tên.")
+            return
+
+        try:
+            # Kiểm tra có chọn ảnh mới không
+            enc = None
+            if fpath:
+                img = Image.open(fpath).convert("RGB")
+                enc = face_encode_from_image(img)
+                
+                if enc is None:
+                    messagebox.showerror(
+                        "Lỗi nhận diện", 
+                        "Không phát hiện được khuôn mặt trong ảnh mới.\n\n"
+                        "Vui lòng chọn ảnh khác hoặc bỏ trống để giữ ảnh cũ."
+                    )
+                    return
+
+            # Cập nhật database
+            ok, msg = db.update_employee(self._edit_emp_id, name, dept, phone, enc)
+
+            if ok:
+                messagebox.showinfo("Thành công", msg)
+                self.refresh_employees()
+                self.cancel_edit()  # Quay về chế độ thêm mới
             else:
                 messagebox.showerror("Lỗi", msg)
                 

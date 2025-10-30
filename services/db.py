@@ -286,6 +286,55 @@ def add_employee(emp_code: str, name: str, department: str,
             con.close()
 
 
+def update_employee(emp_id: int, name: str, department: str, 
+                   phone: str, embedding: Optional[np.ndarray] = None) -> Tuple[bool, str]:
+    """
+    Cập nhật thông tin nhân viên
+    
+    Args:
+        emp_id: ID nhân viên cần sửa
+        name: Tên mới
+        department: Phòng ban mới
+        phone: SĐT mới
+        embedding: Vector khuôn mặt mới (None = giữ nguyên)
+        
+    Returns:
+        Tuple[bool, str]: (success, message)
+    """
+    con = get_conn()
+    cur = con.cursor()
+    try:
+        if embedding is not None:
+            # Cập nhật cả ảnh khuôn mặt
+            cur.execute("""
+                UPDATE employees 
+                SET name=%s, department=%s, phone=%s, embedding=%s
+                WHERE id=%s
+            """, (name, department, phone, np_to_blob(embedding), emp_id))
+        else:
+            # Chỉ cập nhật thông tin, giữ nguyên ảnh
+            cur.execute("""
+                UPDATE employees 
+                SET name=%s, department=%s, phone=%s
+                WHERE id=%s
+            """, (name, department, phone, emp_id))
+        
+        con.commit()
+        
+        if cur.rowcount > 0:
+            return True, "✅ Đã cập nhật thông tin nhân viên."
+        else:
+            return False, "❌ Không tìm thấy nhân viên."
+            
+    except Exception as e:
+        con.rollback()
+        return False, f"❌ Lỗi: {e}"
+    finally:
+        try:
+            cur.close()
+        finally:
+            con.close()
+
 def delete_employee(emp_id: int) -> None:
     """Xóa nhân viên"""
     con = get_conn()
@@ -293,6 +342,31 @@ def delete_employee(emp_id: int) -> None:
     try:
         cur.execute("DELETE FROM employees WHERE id=%s", (emp_id,))
         con.commit()
+    finally:
+        try:
+            cur.close()
+        finally:
+            con.close()
+
+
+def get_employee_by_id(emp_id: int) -> Optional[Dict]:
+    """
+    Lấy thông tin chi tiết 1 nhân viên (không có embedding)
+    
+    Returns:
+        Dict hoặc None nếu không tìm thấy
+    """
+    con = get_conn()
+    cur = con.cursor(dictionary=True)
+    try:
+        cur.execute("""
+            SELECT id, emp_code, name, department, phone, created_at
+            FROM employees
+            WHERE id = %s
+        """, (emp_id,))
+        
+        return cur.fetchone()
+        
     finally:
         try:
             cur.close()

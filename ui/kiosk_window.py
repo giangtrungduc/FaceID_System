@@ -46,7 +46,7 @@ class KioskWindow(tk.Tk):
         self._interval_ms = 33
         
         # Logic chấm công
-        self._cooldown_seconds = 10
+        self._cooldown_seconds = 120
         self._last_scan_emp_id = None
         self._last_scan_time = None
         
@@ -60,7 +60,7 @@ class KioskWindow(tk.Tk):
         """Căn giữa cửa sổ"""
         self.update_idletasks()
         width = 950
-        height = 650
+        height = 720
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
         self.geometry(f'{width}x{height}+{x}+{y}')
@@ -112,8 +112,8 @@ class KioskWindow(tk.Tk):
 
         # Gợi ý tham số để mượt hơn
         self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1200)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 675)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self._updating = True

@@ -44,7 +44,7 @@ FACE_DETECTION_MODEL = "hog"
 # CẤU HÌNH KIOSK
 # ============================================================================
 # Thời gian cooldown giữa 2 lần quét (giây)
-KIOSK_COOLDOWN_SECONDS = 10
+KIOSK_COOLDOWN_SECONDS = 120
 
 # Khoảng thời gian tự động quét (milliseconds)
 KIOSK_SCAN_INTERVAL_MS = 2000
@@ -58,6 +58,17 @@ KIOSK_VIDEO_FPS = 30
 # Giờ làm việc tiêu chuẩn
 DEFAULT_WORK_START_TIME = "08:30:00"
 DEFAULT_WORK_END_TIME = "17:30:00"
+
+#QUY ĐỊNH SỐ GIỜ TỐI THIỂU ĐỂ TÍNH CÔNG
+MIN_WORK_HOURS_FOR_FULL_DAY = 8.0  # Tối thiểu 8 giờ mới tính 1 công
+
+# Thông báo khi thiếu giờ
+INSUFFICIENT_HOURS_MESSAGE = "⚠️ Thiếu giờ (< {min_hours}h)"
+
+#CÁC MỨC CẢNH BÁO
+WARNING_LATE_MINUTES = 15  # Đi muộn > 15 phút sẽ cảnh báo
+WARNING_EARLY_LEAVE_MINUTES = 30  # Về sớm > 30 phút sẽ cảnh báo
+
 
 # ============================================================================
 # CẤU HÌNH THƯ MỤC LƯU TRỮ

@@ -22,7 +22,7 @@ class LoginWindow(tk.Toplevel):
         
         # ===== QUAN TRỌNG: Thiết lập geometry TRƯỚC transient =====
         window_width = 380
-        window_height = 240
+        window_height = 280
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width // 2) - (window_width // 2)
